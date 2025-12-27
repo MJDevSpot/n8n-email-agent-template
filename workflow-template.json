@@ -1,0 +1,665 @@
+{
+  "name": "Email Agent - Meeting Scheduler",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 5,
+              "unit": "minutes"
+            }
+          ]
+        },
+        "filters": {
+          "q": "-label:processed-by-agent"
+        }
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.3,
+      "position": [448, 680],
+      "id": "gmail-trigger",
+      "name": "Gmail Trigger",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-5-20250929",
+          "cachedResultName": "Claude Sonnet 4.5"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [1920, 608],
+      "id": "anthropic-model-1",
+      "name": "Anthropic Chat Model",
+      "credentials": {
+        "anthropicApi": {
+          "id": "YOUR_ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "description": "Converts raw calendar busy times into readable meeting slots. Use this ONCE immediately after checking calendar. Input should be the output from check_calendar_availability.",
+        "jsCode": "// Get calendar data from previous tool call\nconst input = $input.first().json;\n\n// Extract busy times from all calendars\nlet allBusyTimes = [];\nif (input.calendars) {\n  Object.keys(input.calendars).forEach(cal => {\n    if (input.calendars[cal].busy) {\n      allBusyTimes.push(...input.calendars[cal].busy);\n    }\n  });\n}\n\n// CUSTOMIZE: Update these settings for your availability\nconst config = {\n  workingDays: [2, 3, 4], // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat\n  startHour: 10,          // Start of availability (24h format)\n  endHour: 15,            // End of availability (24h format)\n  meetingDuration: 30,    // Meeting length in minutes\n  bufferMinutes: 15       // Buffer between meetings\n};\n\n// Find available slots\nconst slots = [];\nconst now = new Date();\n\nfor (let dayOffset = 0; dayOffset < 30; dayOffset++) {\n  const checkDate = new Date(now);\n  checkDate.setDate(checkDate.getDate() + dayOffset);\n  \n  if (!config.workingDays.includes(checkDate.getDay())) continue;\n  \n  for (let hour = config.startHour; hour < config.endHour; hour++) {\n    for (let minute = 0; minute < 60; minute += 15) {\n      const slotStart = new Date(checkDate);\n      slotStart.setHours(hour, minute, 0, 0);\n      \n      const slotEnd = new Date(slotStart);\n      slotEnd.setMinutes(slotEnd.getMinutes() + config.meetingDuration);\n      \n      if (slotStart <= now) continue;\n      if (slotEnd.getHours() > config.endHour) continue;\n      \n      const hasConflict = allBusyTimes.some(busy => {\n        const busyStart = new Date(busy.start);\n        const busyEnd = new Date(busy.end);\n        busyStart.setMinutes(busyStart.getMinutes() - config.bufferMinutes);\n        busyEnd.setMinutes(busyEnd.getMinutes() + config.bufferMinutes);\n        return (slotStart < busyEnd && slotEnd > busyStart);\n      });\n      \n      if (!hasConflict) {\n        slots.push({\n          datetime: slotStart.toISOString(),\n          display: slotStart.toLocaleString('en-US', {\n            weekday: 'long',\n            month: 'long',\n            day: 'numeric',\n            hour: 'numeric',\n            minute: '2-digit',\n            timeZone: 'America/Chicago',\n            timeZoneName: 'short'\n          })\n        });\n      }\n      \n      if (slots.length >= 20) break;\n    }\n    if (slots.length >= 20) break;\n  }\n  if (slots.length >= 20) break;\n}\n\nconst topSlots = slots.slice(0, 4);\nconst formatted = topSlots.length > 0 \n  ? \"Available times:\\n\" + topSlots.map((s, i) => `${i+1}. ${s.display}`).join('\\n')\n  : \"No availability found in the next 30 days during working hours\";\n\nreturn [{ \n  json: { \n    available_slots: formatted,\n    slot_count: topSlots.length,\n    raw_slots: topSlots\n  } \n}];"
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.3,
+      "position": [2048, 608],
+      "id": "format-times-tool",
+      "name": "format_available_times"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nreturn items.map(item => {\n  let response = item.json.output || '';\n  \n  const greetingPatterns = [\n    /^[\\s\\S]*?(Hi[,\\s])/i,\n    /^[\\s\\S]*?(Hello[,\\s])/i,\n    /^[\\s\\S]*?(Dear[,\\s])/i\n  ];\n  \n  for (const pattern of greetingPatterns) {\n    const match = response.match(pattern);\n    if (match) {\n      response = match[1] + response.split(match[1])[1];\n      break;\n    }\n  }\n  \n  response = response.replace(/\\[CLASSIFICATION:.*?\\]/gi, '').trim();\n  \n  if (response.includes('---')) {\n    const parts = response.split('---');\n    response = parts[parts.length - 1].trim();\n  }\n  \n  return {\n    json: {\n      ...item.json,\n      cleaned_response: response\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2384, 488],
+      "id": "clean-response",
+      "name": "Clean Agent Response"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Check calendars for busy times. Use this ONCE when someone requests a meeting. Returns raw busy time data.",
+        "method": "POST",
+        "url": "=https://www.googleapis.com/calendar/v3/freeBusy",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Content-Type", "value": "application/json"},
+            {"name": "Accept", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"timeMin\": \"{{ new Date().toISOString() }}\",\n  \"timeMax\": \"{{ new Date(Date.now() + 30*24*60*60*1000).toISOString() }}\",\n  \"timeZone\": \"America/Chicago\",\n  \"items\": [\n    {\"id\": \"YOUR_CALENDAR_EMAIL_1\"},\n    {\"id\": \"YOUR_CALENDAR_EMAIL_2\"}\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.3,
+      "position": [2176, 608],
+      "id": "calendar-check-tool",
+      "name": "check_calendar_availability",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "YOUR_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-5-20250929",
+          "cachedResultName": "Claude Sonnet 4.5"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [1416, 904],
+      "id": "anthropic-model-2",
+      "name": "Anthropic Chat Model1",
+      "credentials": {
+        "anthropicApi": {
+          "id": "YOUR_ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_EMAIL",
+          "mode": "id"
+        },
+        "start": "={{ $json.selected_datetime }}",
+        "end": "={{ DateTime.fromISO($json.selected_datetime, { zone: $json.timezone }).plus({ minutes: 30 }).toISO() }}",
+        "additionalFields": {
+          "attendees": ["={{ $json.from_email }}"],
+          "conferenceDataUi": {
+            "conferenceDataValues": {
+              "conferenceSolution": "hangoutsMeet"
+            }
+          },
+          "description": "=Meeting booked automatically via Email Agent\n\nContact: {{ $json.from_name }}\nEmail: {{ $json.from_email }}",
+          "sendUpdates": "all",
+          "summary": "=Meeting - {{ $json.from_name }}"
+        },
+        "useN8nTimeZone": false
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [2608, 732],
+      "id": "create-event",
+      "name": "Create Calendar Event",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "YOUR_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $json.id }}",
+        "simple": false,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [672, 680],
+      "id": "get-full-email",
+      "name": "Get Full Email",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "get",
+        "threadId": "={{ $json.threadId }}",
+        "simple": false,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [896, 680],
+      "id": "get-thread",
+      "name": "Get Thread Context",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Use $input (from Get Thread Context) - this is the thread data\nconst thread = $input.first() && $input.first().json ? $input.first().json : {};\nconst trigger = $('Gmail Trigger').first() && $('Gmail Trigger').first().json ? $('Gmail Trigger').first().json : {};\n\n// Defensive read of messages\nconst messages = Array.isArray(thread.messages) ? thread.messages : [];\nconst currentMsg = messages.length > 0 ? messages[messages.length - 1] : null;\n\n// Extract headers from current message\nlet headers = {};\nif (\n  currentMsg &&\n  currentMsg.payload &&\n  Array.isArray(currentMsg.payload.headers)\n) {\n  currentMsg.payload.headers.forEach(h => {\n    if (h && h.name) {\n      headers[h.name] = h.value;\n    }\n  });\n}\n\nlet threadHistory = '';\nif (messages.length > 1) {\n  threadHistory = '\\n\\nPREVIOUS EMAILS IN THREAD:\\n';\n  for (let idx = 0; idx < messages.length - 1; idx++) {\n    const msg = messages[idx];\n    const msgHeaders = {};\n    if (\n      msg.payload &&\n      Array.isArray(msg.payload.headers)\n    ) {\n      msg.payload.headers.forEach(h => {\n        if (h && h.name) {\n          msgHeaders[h.name] = h.value;\n        }\n      });\n    }\n    threadHistory += '\\n--- Email ' + (idx + 1) + ' ---\\n';\n    threadHistory += 'From: ' + (msgHeaders.From || 'Unknown') + '\\n';\n    threadHistory += 'Date: ' + (msgHeaders.Date || 'Unknown') + '\\n';\n    threadHistory += (msg.snippet || '') + '\\n';\n  }\n}\n\n// Parse From header\nlet fromEmail = (headers.From || trigger.From || '');\nlet fromName = fromEmail;\nif (typeof fromEmail === 'string' && fromEmail.includes('<')) {\n  const match = fromEmail.match(/<([^>]+)>/);\n  if (match) {\n    fromName = fromEmail.split('<')[0].trim();\n    fromEmail = match[1];\n  }\n}\n\nreturn [{\n  json: {\n    id: currentMsg && currentMsg.id ? currentMsg.id : (trigger.id || ''),\n    threadId: (thread.id || trigger.threadId || ''),\n    subject: (headers.Subject || trigger.Subject || ''),\n    date: (headers.Date || ''),\n    text: (currentMsg && currentMsg.snippet ? currentMsg.snippet : trigger.snippet || ''),\n    snippet: (currentMsg && currentMsg.snippet ? currentMsg.snippet : trigger.snippet || ''),\n    from: {\n      value: [{\n        address: fromEmail,\n        name: fromName\n      }]\n    },\n    to: (headers.To || trigger.To || ''),\n    thread_history: threadHistory,\n    thread_length: messages.length\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 680],
+      "id": "merge-thread",
+      "name": "Merge Thread Context"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analyze this email and draft an appropriate response:\n\nFROM: {{ $('Gmail Trigger').item.json.From }}\nSUBJECT: {{ $('Merge Thread Context').item.json.subject }}\nDATE: {{ $('Get Thread Context').item.json.messages[0].Date }}\n\nEMAIL BODY: {{ $('Merge Thread Context').item.json.text }}",
+        "options": {
+          "systemMessage": "You are an AI Email Assistant.\n\n# CUSTOMIZE THIS SECTION\n\n## Business Context\n[Describe your business, services, and value proposition here]\n\n## Your Role\n- Answer questions about your services\n- Schedule meetings when appropriate\n- Defer pricing questions to a human\n\n## Scheduling\n[Describe your availability and scheduling preferences]\n\n## Tone\n[Describe the desired communication style]\n\n# INSTRUCTIONS\n\nRead the incoming email and draft an appropriate response.\n\n## Classification\nAt the end of your response, add:\n[CLASSIFICATION: X]\n\nWhere X is one of:\n- Pricing Inquiry\n- Technical Question\n- General Info\n- Scheduling\n- Other\n\n## Tool Usage\n1. If someone requests a meeting, call check_calendar_availability ONCE\n2. Then call format_available_times ONCE\n3. Draft your response with the times\n4. STOP\n\n## Response Format\n- Start with greeting\n- Write the email body\n- No sign-off (added later)\n- Add [CLASSIFICATION: X] at the end\n\nIf spam or no response needed, output:\n\"NO RESPONSE NEEDED\""
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [1976, 384],
+      "id": "ai-agent",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Email Thread:\nFrom: {{ $json.from.value[0].name }}\nSubject: {{ $json.subject }}\nDate: {{ $json.date }}\n\nBody: {{ $json.text }}{{ $json.thread_history }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are an email classification agent.\n\nAnalyze the email thread and determine what action is needed. Respond with ONLY a JSON object.\n\n## Classification Rules\n\n1. NEW_INQUIRY: First-time contact or general question\n   - No previous scheduling conversation\n   - Asking about services or requesting meeting\n\n2. BOOKING_CONFIRMATION: Person selecting a specific meeting time\n   - Thread contains previous email with time options\n   - Person is confirming a time\n\n## Response Format\n\nFor NEW_INQUIRY:\n{\"action\": \"new_inquiry\"}\n\nFor BOOKING_CONFIRMATION:\n{\"action\": \"booking_confirmation\", \"selected_datetime\": \"YYYY-MM-DDTHH:MM:SS\", \"timezone\": \"America/Chicago\", \"confidence\": \"high|medium|low\"}\n\n## Rules\n- Respond with ONLY the JSON object\n- No markdown code blocks\n- No explanations\n- If unsure about datetime, set confidence to \"low\""
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [1344, 680],
+      "id": "email-router",
+      "name": "Email Router"
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_BASE_ID",
+          "mode": "list",
+          "cachedResultName": "Your Base Name",
+          "cachedResultUrl": "https://airtable.com/YOUR_AIRTABLE_BASE_ID"
+        },
+        "table": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Inbound Emails",
+          "cachedResultUrl": "https://airtable.com/YOUR_AIRTABLE_BASE_ID/YOUR_AIRTABLE_TABLE_ID"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Email ID": "={{ $('Merge Thread Context').item.json.id }}",
+            "From Email": "={{ $('Merge Thread Context').item.json.from.value[0].address }}",
+            "From Name": "={{ $('Merge Thread Context').item.json.from.value[0].name }}",
+            "Subject": "={{ $('Merge Thread Context').item.json.subject }}",
+            "Body": "={{ $('Merge Thread Context').item.json.text }}",
+            "Status": "Draft Ready",
+            "Agent Draft": "={{ $json.output }}",
+            "Classification": "={{ $json.output.match(/\\[CLASSIFICATION: (.+)\\]/)?.[1] || 'Other' }}"
+          },
+          "matchingColumns": []
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [2608, 488],
+      "id": "save-airtable",
+      "name": "Save to Airtable",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "YOUR_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_SLACK_CHANNEL_ID",
+          "mode": "list",
+          "cachedResultName": "your-channel-name"
+        },
+        "text": "=New Email Draft Ready!\nFrom: {{ $json.fields['From Email'] }}, {{ $json.fields['From Name'] }}\nSubject: {{ $json.fields.Subject }}\nAgent Response: {{ $('AI Agent').item.json.output }}\nView in Airtable: https://airtable.com/YOUR_AIRTABLE_BASE_ID",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [2832, 488],
+      "id": "notify-slack",
+      "name": "Notify Slack",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "reply",
+        "messageId": "={{ $('Merge Thread Context').item.json.id }}",
+        "message": "={{ $('Clean Agent Response').item.json.cleaned_response.replace(/\\n\\n/g, '</p><p>').replace(/\\n/g, '<br>') }}\n\n<p>Best regards,<br>\n<strong>Your Email Assistant</strong><br>\n<em>on behalf of Your Company</em><br></p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [3280, 488],
+      "id": "send-reply",
+      "name": "Send Email Response",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $('Merge Thread Context').item.json.id }}",
+        "labelIds": ["YOUR_GMAIL_LABEL_ID"]
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [3504, 488],
+      "id": "mark-processed",
+      "name": "Mark as Processed",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const routerOutput = $('Email Router').first().json.output;\n\nlet parsed;\ntry {\n  parsed = JSON.parse(routerOutput);\n} catch (e) {\n  const jsonMatch = routerOutput.match(/\\{[\\s\\S]*\\}/);\n  parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};\n}\n\nconst emailData = $('Merge Thread Context').first().json;\n\nlet fromEmail = 'unknown@email.com';\nlet fromName = 'Unknown Sender';\n\nif (emailData.from && emailData.from.value && emailData.from.value[0]) {\n  fromEmail = emailData.from.value[0].address || 'unknown@email.com';\n  fromName = emailData.from.value[0].name || 'Unknown Sender';\n}\n\nconst subject = emailData.subject || '';\n\nreturn [{\n  json: {\n    action: parsed.action,\n    selected_datetime: parsed.selected_datetime,\n    timezone: parsed.timezone || 'America/Chicago',\n    confidence: parsed.confidence,\n    from_email: fromEmail,\n    from_name: fromName,\n    subject: subject,\n    thread_id: emailData.threadId || 'unknown'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2040, 828],
+      "id": "parse-booking",
+      "name": "Parse Booking Details"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "confidence-check",
+              "leftValue": "={{ $json.confidence.toLowerCase() }}",
+              "rightValue": "high",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [2384, 828],
+      "id": "check-confidence",
+      "name": "Check Confidence"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "not-empty",
+              "leftValue": "={{ $('Clean Agent Response').item.json.cleaned_response }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "not-no-response",
+              "leftValue": "={{ $('Clean Agent Response').item.json.cleaned_response.toLowerCase() }}",
+              "rightValue": "=no response needed",
+              "operator": {
+                "type": "string",
+                "operation": "notContains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [3056, 488],
+      "id": "filter-response",
+      "name": "Filter"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "route-check",
+              "leftValue": "={{ $json.output.includes('\"action\": \"new_inquiry\"') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1696, 680],
+      "id": "route-action",
+      "name": "Route By Action"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Parse Booking Details').item.json.from_email }}",
+        "subject": "=Re: {{ $('Parse Booking Details').item.json.subject }}",
+        "message": "=<p>I've added our meeting to the calendar:</p>\n\n<p><strong>{{ DateTime.fromISO($('Parse Booking Details').item.json.selected_datetime).toLocaleString(DateTime.DATETIME_FULL) }}</strong><br>\n30 minutes<br>\nGoogle Meet: {{ $('Create Calendar Event').item.json.hangoutLink }}</p>\n\n<p>You should receive a calendar invitation shortly.</p>\n\n<p>Looking forward to speaking with you!</p>\n\n<p>Best regards,<br>\n<strong>Your Email Assistant</strong><br>\n<em>on behalf of Your Company</em></p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [2832, 732],
+      "id": "send-booking-confirm",
+      "name": "Send Booking Confirmation Email",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $('Merge Thread Context').item.json.id }}",
+        "labelIds": ["YOUR_GMAIL_LABEL_ID"]
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [3056, 732],
+      "id": "mark-booking-processed",
+      "name": "Mark Booking Processed",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_BASE_ID",
+          "mode": "list",
+          "cachedResultName": "Your Base Name",
+          "cachedResultUrl": "https://airtable.com/YOUR_AIRTABLE_BASE_ID"
+        },
+        "table": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Inbound Emails",
+          "cachedResultUrl": "https://airtable.com/YOUR_AIRTABLE_BASE_ID/YOUR_AIRTABLE_TABLE_ID"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Email ID": "={{ $('Merge Thread Context').item.json.id }}",
+            "From Email": "={{ $json.from_email }}",
+            "From Name": "={{ $json.from_name }}",
+            "Subject": "={{ $json.subject }}",
+            "Body": "={{ $('Merge Thread Context').item.json.text }}",
+            "Status": "Needs Review",
+            "Agent Draft": "=Low confidence booking detected. Selected datetime: {{ $json.selected_datetime }}. Confidence: {{ $json.confidence }}",
+            "Classification": "Scheduling"
+          },
+          "matchingColumns": []
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [2608, 924],
+      "id": "save-low-confidence",
+      "name": "Save Low Confidence to Airtable",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "YOUR_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_SLACK_CHANNEL_ID",
+          "mode": "list",
+          "cachedResultName": "your-channel-name"
+        },
+        "text": "=Low Confidence Booking - Needs Manual Review\nFrom: {{ $json.from_email }}, {{ $json.from_name }}\nSubject: {{ $json.subject }}\nDetected datetime: {{ $json.selected_datetime }}\nConfidence: {{ $json.confidence }}\n\nPlease review in Airtable: https://airtable.com/YOUR_AIRTABLE_BASE_ID",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [2832, 924],
+      "id": "notify-low-confidence",
+      "name": "Notify Low Confidence",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $('Merge Thread Context').item.json.id }}",
+        "labelIds": ["processed-by-agent"]
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [3056, 924],
+      "id": "mark-low-confidence-processed",
+      "name": "Mark Low Confidence Processed",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [[{"node": "Get Full Email", "type": "main", "index": 0}]]
+    },
+    "Anthropic Chat Model": {
+      "ai_languageModel": [[{"node": "AI Agent", "type": "ai_languageModel", "index": 0}]]
+    },
+    "format_available_times": {
+      "ai_tool": [[{"node": "AI Agent", "type": "ai_tool", "index": 0}]]
+    },
+    "Clean Agent Response": {
+      "main": [[{"node": "Save to Airtable", "type": "main", "index": 0}]]
+    },
+    "check_calendar_availability": {
+      "ai_tool": [[{"node": "AI Agent", "type": "ai_tool", "index": 0}]]
+    },
+    "Anthropic Chat Model1": {
+      "ai_languageModel": [[{"node": "Email Router", "type": "ai_languageModel", "index": 0}]]
+    },
+    "Get Thread Context": {
+      "main": [[{"node": "Merge Thread Context", "type": "main", "index": 0}]]
+    },
+    "Merge Thread Context": {
+      "main": [[{"node": "Email Router", "type": "main", "index": 0}]]
+    },
+    "AI Agent": {
+      "main": [[{"node": "Clean Agent Response", "type": "main", "index": 0}]]
+    },
+    "Email Router": {
+      "main": [[{"node": "Route By Action", "type": "main", "index": 0}]]
+    },
+    "Save to Airtable": {
+      "main": [[{"node": "Notify Slack", "type": "main", "index": 0}]]
+    },
+    "Notify Slack": {
+      "main": [[{"node": "Filter", "type": "main", "index": 0}]]
+    },
+    "Parse Booking Details": {
+      "main": [[{"node": "Check Confidence", "type": "main", "index": 0}]]
+    },
+    "Check Confidence": {
+      "main": [
+        [{"node": "Create Calendar Event", "type": "main", "index": 0}],
+        [{"node": "Save Low Confidence to Airtable", "type": "main", "index": 0}]
+      ]
+    },
+    "Filter": {
+      "main": [[{"node": "Send Email Response", "type": "main", "index": 0}]]
+    },
+    "Route By Action": {
+      "main": [
+        [{"node": "AI Agent", "type": "main", "index": 0}],
+        [{"node": "Parse Booking Details", "type": "main", "index": 0}]
+      ]
+    },
+    "Create Calendar Event": {
+      "main": [[{"node": "Send Booking Confirmation Email", "type": "main", "index": 0}]]
+    },
+    "Send Booking Confirmation Email": {
+      "main": [[{"node": "Mark Booking Processed", "type": "main", "index": 0}]]
+    },
+    "Send Email Response": {
+      "main": [[{"node": "Mark as Processed", "type": "main", "index": 0}]]
+    },
+    "Save Low Confidence to Airtable": {
+      "main": [[{"node": "Notify Low Confidence", "type": "main", "index": 0}]]
+    },
+    "Notify Low Confidence": {
+      "main": [[{"node": "Mark Low Confidence Processed", "type": "main", "index": 0}]]
+    },
+    "Get Full Email": {
+      "main": [[{"node": "Get Thread Context", "type": "main", "index": 0}]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "tags": []
+}
