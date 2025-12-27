@@ -1,0 +1,45 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#4A90D9'}}}%%
+
+sequenceDiagram
+    participant Lead as Lead/Prospect
+    participant Gmail as Gmail Inbox
+    participant N8N as N8N Workflow
+    participant AI as AI Engine
+    participant Cal as Google Calendar
+    participant AT as Airtable
+    participant Slack as Slack
+
+    Lead->>Gmail: Sends inquiry email
+    Gmail->>N8N: Trigger fires (polling)
+    N8N->>N8N: Get thread context
+    N8N->>AI: Classify email
+    AI-->>N8N: Classification + action
+
+    alt Meeting Request
+        N8N->>Cal: Check FreeBusy
+        Cal-->>N8N: Busy times
+        N8N->>N8N: Format available slots
+        N8N->>AI: Draft response with times
+        AI-->>N8N: Email draft
+        N8N->>Gmail: Send response
+        N8N->>AT: Log interaction
+        N8N->>Slack: Notify team
+    else Booking Confirmation
+        N8N->>N8N: Parse selected time
+        N8N->>Cal: Create event + Meet
+        Cal-->>N8N: Event confirmed
+        N8N->>Gmail: Send confirmation
+        N8N->>AT: Log booking
+        N8N->>Slack: Notify: Meeting booked!
+    else General Inquiry
+        N8N->>AI: Draft helpful response
+        AI-->>N8N: Email draft
+        N8N->>Gmail: Send response
+        N8N->>AT: Log interaction
+        N8N->>Slack: Notify team
+    else Needs Human
+        N8N->>AT: Log as needs attention
+        N8N->>Slack: Alert: Human needed
+    end
+
+    Gmail-->>Lead: Response delivered

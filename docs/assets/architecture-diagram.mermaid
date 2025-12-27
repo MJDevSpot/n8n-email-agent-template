@@ -1,0 +1,54 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#4A90D9', 'primaryTextColor': '#fff', 'primaryBorderColor': '#2E5A8A', 'lineColor': '#333', 'secondaryColor': '#82C341', 'tertiaryColor': '#F5A623'}}}%%
+
+flowchart TB
+    subgraph External["External Systems"]
+        Gmail["Gmail Inbox"]
+        GCal["Google Calendar"]
+        Anthropic["Anthropic API"]
+    end
+
+    subgraph N8N["N8N Workflow Engine"]
+        Trigger["Gmail Trigger<br/>(5-min poll)"]
+        Router["Email Router<br/>(AI Classification)"]
+        Agent["AI Agent<br/>(Response Generation)"]
+        Booking["Booking Flow<br/>(Calendar Event)"]
+        Send["Send Email<br/>(Gmail API)"]
+    end
+
+    subgraph Output["Output Systems"]
+        Airtable["Airtable<br/>(Logging)"]
+        Slack["Slack<br/>(Notifications)"]
+        Meet["Google Meet<br/>(Video Link)"]
+    end
+
+    Gmail --> Trigger
+    Trigger --> Router
+    Router -->|"meeting_request"| Agent
+    Router -->|"booking_confirmation"| Booking
+    Router -->|"general_inquiry"| Agent
+    Router -->|"needs_human"| Slack
+
+    Agent --> GCal
+    GCal --> Agent
+    Agent --> Anthropic
+    Anthropic --> Agent
+    Agent --> Send
+
+    Booking --> GCal
+    GCal --> Booking
+    Booking --> Meet
+    Booking --> Send
+
+    Send --> Gmail
+    Send --> Airtable
+    Send --> Slack
+    Booking --> Airtable
+    Booking --> Slack
+
+    classDef external fill:#4A90D9,stroke:#2E5A8A,color:#fff
+    classDef workflow fill:#82C341,stroke:#5A9A2A,color:#fff
+    classDef output fill:#F5A623,stroke:#C78A1C,color:#fff
+
+    class Gmail,GCal,Anthropic external
+    class Trigger,Router,Agent,Booking,Send workflow
+    class Airtable,Slack,Meet output

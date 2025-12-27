@@ -174,6 +174,19 @@ Verify the label exists and the label ID is correct (use Gmail API to find ID).
 ### Calendar Not Showing Available Times
 Check that all calendar email addresses in `check_calendar_availability` are correct.
 
+See [Troubleshooting Playbook](docs/internal/TROUBLESHOOTING_PLAYBOOK.md) for comprehensive issue resolution.
+
+## Documentation
+
+Complete documentation is available in the `/docs` folder:
+
+| Category | Documents |
+|----------|-----------|
+| **Client-Facing** | [Capability Overview](docs/client-facing/CAPABILITY_OVERVIEW.md) · [Integration Requirements](docs/client-facing/INTEGRATION_REQUIREMENTS.md) · [SLA & Support](docs/client-facing/SLA_AND_SUPPORT.md) · [ROI Calculator](docs/client-facing/ROI_CALCULATOR.md) |
+| **Internal** | [Configuration Matrix](docs/internal/CONFIGURATION_MATRIX.md) · [Deployment Checklist](docs/internal/DEPLOYMENT_CHECKLIST.md) · [Troubleshooting](docs/internal/TROUBLESHOOTING_PLAYBOOK.md) |
+| **Technical** | [Architecture](docs/technical/ARCHITECTURE_OVERVIEW.md) · [Node Reference](docs/technical/NODE_REFERENCE.md) · [API Dependencies](docs/technical/API_DEPENDENCIES.md) · [Disaster Recovery](docs/technical/DISASTER_RECOVERY.md) |
+| **Templates** | [Client Onboarding Form](docs/templates/client-onboarding-form.md) · [Handoff Document](docs/templates/handoff-document-template.md) |
+
 ## License
 
 MIT License - Feel free to use and modify for your needs.
